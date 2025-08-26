@@ -144,11 +144,21 @@ void KilnApi::update() {
   int hold = this->schedule[current_step][2];
   // divide 3600 to make ramp per second 1s
   float ramp_calculated = (float)ramp / (float)3600;
+  // assume the first step is always heating since it is an kiln after all
+  bool heating_step = true;
 
   // if target is lower then previous it is a cooling cycle, negate ramp_calculated
   if(current_step != 0 && target < this->schedule[current_step-1][1]) {
     ESP_LOGD(TAG, "Cooling step, negating ramp");
     ramp_calculated = -ramp_calculated;
+    heating_step = false;
+  }
+
+  // calculate new target temperature
+  float new_target = kiln_->target_temperature + ramp_calculated;
+  // when overshoot, just set target
+  if((heating_step && new_target >= target) || (!heating_step && new_target <= target)) {
+    new_target = target;
   }
 
   // check if target from step reached
@@ -157,7 +167,12 @@ void KilnApi::update() {
   if (
     this->remaining_hold < 0
     && (
-      (ramp_calculated > 0 && kiln_->current_temperature >= target) || (ramp_calculated < 0 && kiln_->current_temperature <= target)
+      // heating step, target must equal new_target to make sure the time is long enough
+      // otherwise might exit early when target target temperature is reached prematurely
+      (heating_step && kiln_->current_temperature >= target  && target == new_target)
+      ||
+      // cooling step
+      (!heating_step && kiln_->current_temperature <= target && target == new_target)
     )
   ) {
     ESP_LOGI(TAG, "Target reached");
@@ -168,6 +183,7 @@ void KilnApi::update() {
     } else {
       // move to next step, no hold
       current_step++;
+      ESP_LOGI(TAG, "Moving to step %i in schedule", this->current_step);
       return;
     }
   }
@@ -186,12 +202,6 @@ void KilnApi::update() {
     return;
   }
 
-  // set temperature when needed
-  float new_target = kiln_->target_temperature + ramp_calculated;
-  // when overshoot, just set target
-  if((ramp_calculated > 0 && new_target >= target) || (ramp_calculated < 0 && new_target <= target)) {
-    new_target = target;
-  }
   if (new_target != kiln_->target_temperature) {
     ESP_LOGD(TAG, "Set target to %.1f", new_target);
     kiln_->target_temperature = new_target;

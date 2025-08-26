@@ -40,7 +40,7 @@ class KilnApi : public PollingComponent, public AsyncWebHandler {
   RequestHandler *handler_;
 
   // runtime in seconds
-  int runtime = 0;
+  unsigned int runtime = 0;
   // starting temperature
   int schedule_start_temperature = 0;
   // schedule name

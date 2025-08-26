@@ -4,6 +4,14 @@ ESP based controller to control a Kiln and program firing schedules.
 For the UI part see this repository:
 https://github.com/kiln-controller/ui
 
+## Local test
+
+curl -X POST http://kiln.local/kiln/schedule \
+    -H "Content-Type: application/json" \
+    -d '{"name":"test","schedule":[[999999,100,1],[10,15,0]]}'
+
+curl -X POST http://kiln.local/number/template_temp/set?value=101
+
 ## Credits/Inspiration
 
 * [esphome/esphome](https://www.esphome.io/)

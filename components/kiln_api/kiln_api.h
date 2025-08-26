@@ -10,6 +10,7 @@ namespace kiln_api {
 
 class RequestHandler;
 
+// https://github.com/esphome/esphome/blob/release/esphome/components/web_server_base/web_server_base.h
 class KilnApi : public PollingComponent, public AsyncWebHandler {
  public:
   KilnApi(web_server_base::WebServerBase *base, pid::PIDClimate *kiln) : PollingComponent(1000), base_(base), kiln_(kiln) {}
@@ -19,10 +20,10 @@ class KilnApi : public PollingComponent, public AsyncWebHandler {
   void dump_config() override;
 
   void set_request_handler(RequestHandler *handler) { handler_ = handler; };
-  bool canHandle(AsyncWebServerRequest *request) override;
+  bool canHandle(AsyncWebServerRequest *request) const override;
   void handleBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) override;
   void handleRequest(AsyncWebServerRequest *request) override;
-  bool isRequestHandlerTrivial() override;
+  bool isRequestHandlerTrivial() const override;
 
   // handle /schedule request
   void handle_schedule_request(AsyncWebServerRequest *request);

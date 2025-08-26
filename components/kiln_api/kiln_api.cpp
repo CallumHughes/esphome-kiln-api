@@ -4,7 +4,7 @@
 namespace esphome {
 namespace kiln_api {
 
-static const char *TAG = "kiln_api";
+static const char *TAG = "kiln_api_0.1.0";
 
 void KilnApi::setup() {
   base_->add_handler(this);
@@ -18,7 +18,7 @@ void KilnApi::dump_config() {
   ESP_LOGCONFIG(TAG, "Listening on path '/kiln'");
 }
 
-bool KilnApi::canHandle(AsyncWebServerRequest *request) {
+bool KilnApi::canHandle(AsyncWebServerRequest *request) const {
   if (request->url().startsWith("/kiln/schedule")) {
     return true;
   }
@@ -53,7 +53,7 @@ void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
     if (request->_tempObject != NULL) {
       // https://github.com/esphome/esphome/blob/95e45dc12c9e313cbb5787978b3e067f581c76c9/esphome/components/mqtt/mqtt_client.cpp#L413
       json::parse_json(std::string((char *)request->_tempObject), [&](JsonObject x) -> bool {
-        if (x.containsKey("name") && x.containsKey("schedule")) {
+        if (x["name"].is<JsonVariant>() && x["schedule"].is<JsonVariant>()) {
           this->schedule_name.assign(x["name"].as<std::string>());
           JsonArrayConst parsed = x["schedule"].as<JsonArrayConst>();
           for(JsonVariantConst step : parsed) {
@@ -94,7 +94,7 @@ void KilnApi::handleBody(AsyncWebServerRequest *request, uint8_t *data, size_t l
   }
 }
 
-bool KilnApi::isRequestHandlerTrivial() { return false; }
+bool KilnApi::isRequestHandlerTrivial() const { return false; }
 
 RequestHandler::RequestHandler(KilnApi *parent) {
   parent->set_request_handler(this);
@@ -218,7 +218,7 @@ void KilnApi::update() {
 }  // namespace esphome
 
 // https://arduinojson.org/v6/how-to/create-converters-for-stl-containers/
-namespace ARDUINOJSON_NAMESPACE {
+namespace ArduinoJson {
 template <typename T>
 struct Converter<std::vector<T> > {
   static void toJson(const std::vector<T>& src, JsonVariant dst) {
@@ -242,9 +242,9 @@ struct Converter<std::vector<T> > {
     return result;
   }
 };
-}  // namespace ARDUINOJSON_NAMESPACE
+}  // namespace ArduinoJson
 
-namespace ARDUINOJSON_NAMESPACE {
+namespace ArduinoJson {
 template <typename T, size_t N>
 struct Converter<std::array<T, N> > {
   static void toJson(const std::array<T, N>& src, JsonVariant dst) {
@@ -272,4 +272,4 @@ struct Converter<std::array<T, N> > {
     return result && size == N;
   }
 };
-}  // namespace ARDUINOJSON_NAMESPACE
+}  // namespace ArduinoJson

@@ -5,11 +5,12 @@ captive_portal:
 # Enable webserver
 web_server:
   port: 80
-  css_url: https://kiln-controller.s3.eu-central-1.amazonaws.com/assets/style.css
+  css_url: https://kiln-controller.s3.eu-central-1.amazonaws.com/assets/index.css
   js_url: https://kiln-controller.s3.eu-central-1.amazonaws.com/assets/index.js
 
 # Enable ota
 ota:
+  platform: esphome
 
 # Enable logging
 logger:
@@ -24,36 +25,25 @@ status_led:
 # Enable wifi
 wifi:
   ap: {}
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
   fast_connect: true
   reboot_timeout: 0s
 
 # Esphome setup
 esphome:
   name: kiln
-  platform: ESP8266
+
+esp8266:
   board: d1_mini
-  # based on this https://community.platformio.org/t/which-c-standard-am-i-using/24597/4
-  # get higher c++ standard, mostly for std::to_array
-  platformio_options:
-    build_flags:
-      - -std=gnu++20
-    build_unflags:
-      - -std=gnu++17
 
 # Modules setup
 spi:
-  miso_pin: D2
+  miso_pin: D3
   clk_pin: D4
 
 # Setup API
 kiln_api:
 external_components:
   - source: github://kiln-controller/esphome-kiln-api@main
-  # - source:
-  #     type: local
-  #     path: components/
 
 # Kiln
 output:
@@ -66,7 +56,7 @@ sensor:
   - platform: max6675
     name: Kiln Temperature
     id: kiln_temperature
-    cs_pin: D3
+    cs_pin: D5
     update_interval: 1s
 
 climate:

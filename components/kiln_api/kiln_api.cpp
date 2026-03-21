@@ -1,17 +1,14 @@
 #include "kiln_api.h"
 #include "esphome.h"
+#include <esp_http_server.h>
 
 namespace esphome {
 namespace kiln_api {
 
-static const char *TAG = "kiln_api_0.1.0";
+static const char *TAG = "kiln_api_0.2.1";
 
 void KilnApi::setup() {
   base_->add_handler(this);
-  base_->add_handler(&this->kiln_state_);
-
-  // push state every 10s
-  this->set_interval(10000, [this]() { this->kiln_state_.send(this->get_state().c_str(), "state", millis(), 30000); });
 }
 
 void KilnApi::dump_config() {
@@ -19,16 +16,28 @@ void KilnApi::dump_config() {
 }
 
 bool KilnApi::canHandle(AsyncWebServerRequest *request) const {
-  if (request->url().startsWith("/kiln/schedule")) {
+  std::string url = request->url();
+  if (url.starts_with("/kiln/")) {
     return true;
   }
   return false;
 }
 
+void KilnApi::handle_state_request(AsyncWebServerRequest *request) {
+  if (request->method() != HTTP_GET) {
+    request->send(405, "text/plain", "Method Not Allowed");
+    return;
+  }
+  std::string state_json = this->get_state();
+  AsyncWebServerResponse *response = request->beginResponse(200, "application/json", state_json);
+  response->addHeader("Access-Control-Allow-Origin", "*");
+  request->send(response);
+}
+
 void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
   if (request->method() == HTTP_OPTIONS) {
     // basic CORS response
-    AsyncWebServerResponse *response = request->beginResponse(204);
+    AsyncWebServerResponse *response = request->beginResponse(204, "text/plain");
     response->addHeader("Access-Control-Allow-Methods", "OPTIONS, DELETE, POST");
     response->addHeader("Access-Control-Allow-Headers", "*");
     response->addHeader("Access-Control-Max-Age", "86400");
@@ -50,48 +59,60 @@ void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
     // set the schedule start temperature to the current
     this->schedule_start_temperature = kiln_->target_temperature;
 
-    if (request->_tempObject != NULL) {
-      // https://github.com/esphome/esphome/blob/95e45dc12c9e313cbb5787978b3e067f581c76c9/esphome/components/mqtt/mqtt_client.cpp#L413
-      json::parse_json(std::string((char *)request->_tempObject), [&](JsonObject x) -> bool {
-        if (x["name"].is<JsonVariant>() && x["schedule"].is<JsonVariant>()) {
-          this->schedule_name.assign(x["name"].as<std::string>());
-          JsonArrayConst parsed = x["schedule"].as<JsonArrayConst>();
-          for(JsonVariantConst step : parsed) {
-            int s[3];
-            copyArray(step, s);
-            this->schedule.push_back(std::to_array(s));
+    // Read body directly from the ESP-IDF httpd request
+    // The IDF web server doesn't call handleBody for application/json content types
+    httpd_req_t *req = *request;  // AsyncWebServerRequest has operator httpd_req_t*
+    size_t content_len = request->contentLength();
+
+    if (content_len > 0 && content_len < 4096) {
+      std::string body_str;
+      body_str.resize(content_len);
+      int ret = httpd_req_recv(req, &body_str[0], content_len);
+
+      if (ret > 0) {
+        body_str.resize(ret);
+        ESP_LOGD(TAG, "Received body: %s", body_str.c_str());
+
+        json::parse_json(body_str, [&](JsonObject x) -> bool {
+          if (x["name"].is<JsonVariant>() && x["schedule"].is<JsonVariant>()) {
+            this->schedule_name.assign(x["name"].as<std::string>());
+            JsonArrayConst parsed = x["schedule"].as<JsonArrayConst>();
+            for(JsonVariantConst step : parsed) {
+              int s[3];
+              copyArray(step, s);
+              this->schedule.push_back(std::to_array(s));
+            }
+          } else {
+            request->send(500, "application/json", "{\"status\": \"error\", \"reason\": \"missing name or schedule key in JSON\"}");
           }
-        } else {
-          request->send(500, "application/json", "{\"status\": \"error\", \"reason: \"missing name or schedule key in JSON\"}");
-        }
-        return true;
-      });
-      ESP_LOGI(TAG, "Starting schedule %s, heating kiln", this->schedule_name.c_str());
-      request->send(200, "application/json", "{\"status\": \"ok\"}");
-    } else { // no _tempObject
-      request->send(500, "application/json", "{\"status\": \"error\", \"reason: \"invalid JSON body\"}");
+          return true;
+        });
+        ESP_LOGI(TAG, "Starting schedule %s, heating kiln", this->schedule_name.c_str());
+        request->send(200, "application/json", "{\"status\": \"ok\"}");
+      } else {
+        ESP_LOGW(TAG, "Failed to read request body, ret=%d", ret);
+        request->send(500, "application/json", "{\"status\": \"error\", \"reason\": \"failed to read body\"}");
+      }
+    } else {
+      request->send(500, "application/json", "{\"status\": \"error\", \"reason\": \"invalid or missing JSON body\"}");
     }
   } else {  // unsupported method
-    request->send(405);
+    request->send(405, "text/plain", "Method Not Allowed");
   }
 }
 
 void KilnApi::handleRequest(AsyncWebServerRequest *request) {
-  String path = request->url().substring(5);  // strip /kiln
+  std::string url = request->url();
+  std::string path = url.substr(5);  // strip /kiln
   if (path == "/schedule") {
     this->handle_schedule_request(request);
     return;
   }
-}
-
-void KilnApi::handleBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-  // https://github.com/me-no-dev/ESPAsyncWebServer/blob/f71e3d427b5be9791a8a2c93cf8079792c3a9a26/src/AsyncJson.h#L241
-  if (total > 0 && request->_tempObject == NULL) {
-    request->_tempObject = malloc(total);
+  if (path == "/state") {
+    this->handle_state_request(request);
+    return;
   }
-  if (request->_tempObject != NULL) {
-    memcpy((uint8_t*)(request->_tempObject) + index, data, len);
-  }
+  request->send(404, "text/plain", "Not Found");
 }
 
 bool KilnApi::isRequestHandlerTrivial() const { return false; }
@@ -207,12 +228,6 @@ void KilnApi::update() {
     kiln_->target_temperature = new_target;
   }
 }
-
-// std::string KilnApi::binary_sensor_json(binary_sensor::BinarySensor *obj, bool value, JsonDetail start_config) {
-//   return json::build_json([obj, value, start_config](JsonObject root) {
-//     set_json_state_value(root, obj, "binary_sensor-" + obj->get_object_id(), value ? "ON" : "OFF", value, start_config);
-//   });
-// }
 
 }  // namespace kiln_api
 }  // namespace esphome

@@ -21,12 +21,14 @@ class KilnApi : public PollingComponent, public AsyncWebHandler {
 
   void set_request_handler(RequestHandler *handler) { handler_ = handler; };
   bool canHandle(AsyncWebServerRequest *request) const override;
-  void handleBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) override;
   void handleRequest(AsyncWebServerRequest *request) override;
   bool isRequestHandlerTrivial() const override;
 
   // handle /schedule request
   void handle_schedule_request(AsyncWebServerRequest *request);
+
+  // handle /state request (replaces SSE - clients poll this)
+  void handle_state_request(AsyncWebServerRequest *request);
 
   // return json to sent as event
   std::string get_state();
@@ -36,7 +38,6 @@ class KilnApi : public PollingComponent, public AsyncWebHandler {
 
  protected:
   web_server_base::WebServerBase *base_;
-  AsyncEventSource kiln_state_{"/kiln/state"};
   pid::PIDClimate *kiln_;
   RequestHandler *handler_;
 

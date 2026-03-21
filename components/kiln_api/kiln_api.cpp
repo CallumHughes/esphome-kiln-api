@@ -8,6 +8,15 @@ namespace kiln_api {
 static const char *TAG = "kiln_api_0.2.1";
 
 void KilnApi::setup() {
+  pref_ = global_preferences->make_preference<bool>(fnv1_hash("kiln_api_active"));
+  bool was_active = false;
+  pref_.load(&was_active);
+  if (was_active) {
+    ESP_LOGW(TAG, "Schedule was interrupted by an unexpected restart");
+    this->schedule_interrupted_ = true;
+    bool cleared = false;
+    pref_.save(&cleared);
+  }
   base_->add_handler(this);
 }
 
@@ -56,8 +65,8 @@ void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
   } else if (request->method() == HTTP_DELETE) {
     // cancel current run and shutdown kiln
     ESP_LOGI(TAG, "Cancelled schedule %s, shutdown kiln", this->schedule_name.c_str());
-    kiln_->target_temperature = 0;
     this->reset_progress();
+    this->set_kiln_mode(climate::CLIMATE_MODE_OFF);
     request->send(200, "application/json", "{\"status\": \"ok\"}");
 
   } else if (request->method() == HTTP_POST) {
@@ -98,6 +107,10 @@ void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
           return true;
         });
         ESP_LOGI(TAG, "Starting schedule %s, heating kiln", this->schedule_name.c_str());
+        bool active = true;
+        pref_.save(&active);
+        this->schedule_interrupted_ = false;
+        this->set_kiln_mode(climate::CLIMATE_MODE_HEAT);
         request->send(200, "application/json", "{\"status\": \"ok\"}");
       } else {
         ESP_LOGW(TAG, "Failed to read request body, ret=%d", ret);
@@ -131,12 +144,21 @@ RequestHandler::RequestHandler(KilnApi *parent) {
   parent->set_request_handler(this);
 }
 
+void KilnApi::set_kiln_mode(climate::ClimateMode mode) {
+  auto call = kiln_->make_call();
+  call.set_mode(mode);
+  call.perform();
+}
+
 void KilnApi::reset_progress() {
   this->schedule.clear();
   this->schedule_name = "";
   this->current_step = 0;
   this->remaining_hold = -1;
   this->runtime = 0;
+  this->schedule_interrupted_ = false;
+  bool inactive = false;
+  pref_.save(&inactive);
   this->state_etag_++;
 }
 
@@ -148,6 +170,7 @@ std::string KilnApi::get_state() {
     root["temperature"] = this->kiln_->current_temperature;
     root["schedule"]["name"] = this->schedule_name;
     root["schedule"]["steps"] = this->schedule;
+    root["interrupted"] = this->schedule_interrupted_;
   });
 }
 
@@ -162,8 +185,8 @@ void KilnApi::update() {
   // shutdown kiln when last step done
   if(this->current_step >= this->schedule.size()) {
     ESP_LOGI(TAG, "Shutdown kiln");
-    kiln_->target_temperature = 0;
     this->reset_progress();
+    this->set_kiln_mode(climate::CLIMATE_MODE_OFF);
     return;
   }
 

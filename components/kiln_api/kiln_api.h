@@ -2,6 +2,7 @@
 
 #include "esphome/core/component.h"
 #include "esphome/core/automation.h"
+#include "esphome/core/preferences.h"
 #include "esphome/components/web_server_base/web_server_base.h"
 #include "esphome/components/pid/pid_climate.h"
 
@@ -36,6 +37,9 @@ class KilnApi : public PollingComponent, public AsyncWebHandler {
   // reset kiln to ready state
   void reset_progress();
 
+  // set PID climate mode
+  void set_kiln_mode(climate::ClimateMode mode);
+
  protected:
   web_server_base::WebServerBase *base_;
   pid::PIDClimate *kiln_;
@@ -55,6 +59,9 @@ class KilnApi : public PollingComponent, public AsyncWebHandler {
   int remaining_hold = -1;
   // monotonic counter incremented on every state change, used for ETag generation
   uint32_t state_etag_ = 0;
+  // NVS preference for detecting restart during active schedule
+  ESPPreferenceObject pref_;
+  bool schedule_interrupted_ = false;
 };
 
 class RequestHandler : public Trigger<AsyncWebServerRequest &, AsyncResponseStream &> {

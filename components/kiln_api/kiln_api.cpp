@@ -25,7 +25,9 @@ void KilnApi::dump_config() {
 }
 
 bool KilnApi::canHandle(AsyncWebServerRequest *request) const {
-  std::string url = request->url();
+  char url_buf[513] = {};
+  request->url_to(url_buf);
+  std::string_view url(url_buf);
   if (url.starts_with("/kiln/")) {
     return true;
   }
@@ -39,8 +41,8 @@ void KilnApi::handle_state_request(AsyncWebServerRequest *request) {
   }
   char etag[16];
   snprintf(etag, sizeof(etag), "\"%u\"", this->state_etag_);
-  if (request->hasHeader("If-None-Match") && request->getHeader("If-None-Match")->value() == etag) {
-    AsyncWebServerResponse *not_modified = request->beginResponse(304);
+  if (request->hasHeader("If-None-Match") && request->get_header("If-None-Match") == etag) {
+    AsyncWebServerResponse *not_modified = request->beginResponse(304, "text/plain");
     not_modified->addHeader("Access-Control-Allow-Origin", "*");
     not_modified->addHeader("ETag", etag);
     request->send(not_modified);
@@ -66,8 +68,13 @@ void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
     // cancel current run and shutdown kiln
     ESP_LOGI(TAG, "Cancelled schedule %s, shutdown kiln", this->schedule_name.c_str());
     this->reset_progress();
-    this->set_kiln_mode(climate::CLIMATE_MODE_OFF);
-    request->send(200, "application/json", "{\"status\": \"ok\"}");
+    this->pending_mode_ = climate::CLIMATE_MODE_OFF;
+    this->pending_mode_change_ = true;
+    {
+      AsyncWebServerResponse *response = request->beginResponse(200, "application/json", "{\"status\": \"ok\"}");
+      response->addHeader("Access-Control-Allow-Origin", "*");
+      request->send(response);
+    }
 
   } else if (request->method() == HTTP_POST) {
     // reset current progress
@@ -92,6 +99,7 @@ void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
         body_str.resize(ret);
         ESP_LOGD(TAG, "Received body: %s", body_str.c_str());
 
+        bool parse_ok = false;
         json::parse_json(body_str, [&](JsonObject x) -> bool {
           if (x["name"].is<JsonVariant>() && x["schedule"].is<JsonVariant>()) {
             this->schedule_name.assign(x["name"].as<std::string>());
@@ -101,23 +109,38 @@ void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
               copyArray(step, s);
               this->schedule.push_back(std::to_array(s));
             }
-          } else {
-            request->send(500, "application/json", "{\"status\": \"error\", \"reason\": \"missing name or schedule key in JSON\"}");
+            parse_ok = true;
           }
           return true;
         });
+        if (!parse_ok) {
+          AsyncWebServerResponse *err = request->beginResponse(500, "application/json", "{\"status\": \"error\", \"reason\": \"missing name or schedule key in JSON\"}");
+          err->addHeader("Access-Control-Allow-Origin", "*");
+          request->send(err);
+          return;
+        }
         ESP_LOGI(TAG, "Starting schedule %s, heating kiln", this->schedule_name.c_str());
         bool active = true;
         pref_.save(&active);
         this->schedule_interrupted_ = false;
-        this->set_kiln_mode(climate::CLIMATE_MODE_HEAT);
-        request->send(200, "application/json", "{\"status\": \"ok\"}");
+        this->pending_mode_ = climate::CLIMATE_MODE_HEAT;
+        this->pending_mode_countdown_ = 2;
+        this->pending_mode_change_ = true;
+        {
+          AsyncWebServerResponse *response = request->beginResponse(200, "application/json", "{\"status\": \"ok\"}");
+          response->addHeader("Access-Control-Allow-Origin", "*");
+          request->send(response);
+        }
       } else {
         ESP_LOGW(TAG, "Failed to read request body, ret=%d", ret);
-        request->send(500, "application/json", "{\"status\": \"error\", \"reason\": \"failed to read body\"}");
+        AsyncWebServerResponse *err = request->beginResponse(500, "application/json", "{\"status\": \"error\", \"reason\": \"failed to read body\"}");
+        err->addHeader("Access-Control-Allow-Origin", "*");
+        request->send(err);
       }
     } else {
-      request->send(500, "application/json", "{\"status\": \"error\", \"reason\": \"invalid or missing JSON body\"}");
+      AsyncWebServerResponse *err = request->beginResponse(500, "application/json", "{\"status\": \"error\", \"reason\": \"invalid or missing JSON body\"}");
+      err->addHeader("Access-Control-Allow-Origin", "*");
+      request->send(err);
     }
   } else {  // unsupported method
     request->send(405, "text/plain", "Method Not Allowed");
@@ -125,8 +148,10 @@ void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
 }
 
 void KilnApi::handleRequest(AsyncWebServerRequest *request) {
-  std::string url = request->url();
-  std::string path = url.substr(5);  // strip /kiln
+  char url_buf[513] = {};
+  request->url_to(url_buf);
+  std::string_view url(url_buf);
+  std::string_view path = url.substr(5);  // strip /kiln
   if (path == "/schedule") {
     this->handle_schedule_request(request);
     return;
@@ -151,12 +176,15 @@ void KilnApi::set_kiln_mode(climate::ClimateMode mode) {
 }
 
 void KilnApi::reset_progress() {
+  ESP_LOGI(TAG, "Resetting schedule progress");
   this->schedule.clear();
   this->schedule_name = "";
   this->current_step = 0;
   this->remaining_hold = -1;
   this->runtime = 0;
   this->schedule_interrupted_ = false;
+  this->pending_mode_change_ = false;
+  this->pending_mode_countdown_ = 0;
   bool inactive = false;
   pref_.save(&inactive);
   this->state_etag_++;
@@ -176,8 +204,16 @@ std::string KilnApi::get_state() {
 
 // controlloop, called every second
 void KilnApi::update() {
-  // id(kiln).mode = climate::CLIMATE_MODE_OFF;
-  // id(kiln).action = climate::CLIMATE_ACTION_OFF;
+  if (this->pending_mode_change_) {
+    if (this->pending_mode_countdown_ > 0) {
+      // wait for HTTP response to flush before triggering the mode change that disrupts TCP connections
+      this->pending_mode_countdown_--;
+      return;
+    }
+    this->pending_mode_change_ = false;
+    this->set_kiln_mode(this->pending_mode_);
+    return;
+  }
   if (this->schedule.empty()) {
     return;
   }
@@ -187,6 +223,13 @@ void KilnApi::update() {
     ESP_LOGI(TAG, "Shutdown kiln");
     this->reset_progress();
     this->set_kiln_mode(climate::CLIMATE_MODE_OFF);
+    return;
+  }
+
+  // enforce heat mode while schedule is running — re-applies if externally changed (e.g. HA state restore on reconnect)
+  if (kiln_->mode != climate::CLIMATE_MODE_HEAT) {
+    ESP_LOGW(TAG, "Schedule active but climate not in heat mode (mode=%d), re-applying heat", (int)kiln_->mode);
+    this->set_kiln_mode(climate::CLIMATE_MODE_HEAT);
     return;
   }
 

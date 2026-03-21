@@ -62,6 +62,11 @@ class KilnApi : public PollingComponent, public AsyncWebHandler {
   // NVS preference for detecting restart during active schedule
   ESPPreferenceObject pref_;
   bool schedule_interrupted_ = false;
+  // pending mode change to be applied on the main loop task
+  bool pending_mode_change_ = false;
+  climate::ClimateMode pending_mode_ = climate::CLIMATE_MODE_OFF;
+  // countdown in update() cycles before applying pending mode change — gives HTTP response time to flush
+  int pending_mode_countdown_ = 0;
 };
 
 class RequestHandler : public Trigger<AsyncWebServerRequest &, AsyncResponseStream &> {

@@ -28,9 +28,19 @@ void KilnApi::handle_state_request(AsyncWebServerRequest *request) {
     request->send(405, "text/plain", "Method Not Allowed");
     return;
   }
+  char etag[16];
+  snprintf(etag, sizeof(etag), "\"%u\"", this->state_etag_);
+  if (request->hasHeader("If-None-Match") && request->getHeader("If-None-Match")->value() == etag) {
+    AsyncWebServerResponse *not_modified = request->beginResponse(304);
+    not_modified->addHeader("Access-Control-Allow-Origin", "*");
+    not_modified->addHeader("ETag", etag);
+    request->send(not_modified);
+    return;
+  }
   std::string state_json = this->get_state();
   AsyncWebServerResponse *response = request->beginResponse(200, "application/json", state_json);
   response->addHeader("Access-Control-Allow-Origin", "*");
+  response->addHeader("ETag", etag);
   request->send(response);
 }
 
@@ -127,6 +137,7 @@ void KilnApi::reset_progress() {
   this->current_step = 0;
   this->remaining_hold = -1;
   this->runtime = 0;
+  this->state_etag_++;
 }
 
 std::string KilnApi::get_state() {
@@ -156,8 +167,9 @@ void KilnApi::update() {
     return;
   }
 
-  // update runtime seconds
+  // update runtime seconds and invalidate ETag
   this->runtime++;
+  this->state_etag_++;
 
   // extract data
   int ramp = this->schedule[current_step][0];

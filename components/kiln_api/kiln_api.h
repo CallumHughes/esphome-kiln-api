@@ -53,6 +53,8 @@ class KilnApi : public PollingComponent, public AsyncWebHandler {
   int current_step = 0;
   // remaining hold in seconds, negative means no hold
   int remaining_hold = -1;
+  // monotonic counter incremented on every state change, used for ETag generation
+  uint32_t state_etag_ = 0;
 };
 
 class RequestHandler : public Trigger<AsyncWebServerRequest &, AsyncResponseStream &> {

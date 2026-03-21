@@ -1,6 +1,7 @@
 #include "kiln_api.h"
 #include "esphome.h"
 #include <esp_http_server.h>
+#include <cmath>
 
 namespace esphome {
 namespace kiln_api {
@@ -100,21 +101,51 @@ void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
         ESP_LOGD(TAG, "Received body: %s", body_str.c_str());
 
         bool parse_ok = false;
+        std::string parse_error;
         json::parse_json(body_str, [&](JsonObject x) -> bool {
           if (x["name"].is<JsonVariant>() && x["schedule"].is<JsonVariant>()) {
-            this->schedule_name.assign(x["name"].as<std::string>());
             JsonArrayConst parsed = x["schedule"].as<JsonArrayConst>();
-            for(JsonVariantConst step : parsed) {
-              int s[3];
-              copyArray(step, s);
-              this->schedule.push_back(std::to_array(s));
+            if (parsed.size() == 0) {
+              parse_error = "schedule must not be empty";
+              return true;
             }
+            std::vector<std::array<int, 3>> steps;
+            for (JsonVariantConst step : parsed) {
+              JsonArrayConst arr = step.as<JsonArrayConst>();
+              if (arr.size() != 3) {
+                parse_error = "each step must have exactly 3 values [ramp, target, hold]";
+                return true;
+              }
+              int ramp_val = arr[0].as<int>();
+              int target_val = arr[1].as<int>();
+              int hold_val = arr[2].as<int>();
+              if (ramp_val <= 0 || ramp_val > 9999) {
+                parse_error = "ramp must be between 1 and 9999 (deg/h)";
+                return true;
+              }
+              if (target_val <= 0 || target_val > 1400) {
+                parse_error = "target temperature must be between 1 and 1400";
+                return true;
+              }
+              if (hold_val < 0 || hold_val > 43200) {
+                parse_error = "hold must be between 0 and 43200 minutes";
+                return true;
+              }
+              steps.push_back({ramp_val, target_val, hold_val});
+            }
+            if (!parse_error.empty()) {
+              return true;
+            }
+            this->schedule_name.assign(x["name"].as<std::string>());
+            this->schedule = std::move(steps);
             parse_ok = true;
           }
           return true;
         });
         if (!parse_ok) {
-          AsyncWebServerResponse *err = request->beginResponse(500, "application/json", "{\"status\": \"error\", \"reason\": \"missing name or schedule key in JSON\"}");
+          std::string reason = parse_error.empty() ? "missing name or schedule key in JSON" : parse_error;
+          std::string body = "{\"status\": \"error\", \"reason\": \"" + reason + "\"}";
+          AsyncWebServerResponse *err = request->beginResponse(500, "application/json", body);
           err->addHeader("Access-Control-Allow-Origin", "*");
           request->send(err);
           return;
@@ -176,7 +207,6 @@ void KilnApi::set_kiln_mode(climate::ClimateMode mode) {
 }
 
 void KilnApi::reset_progress() {
-  ESP_LOGI(TAG, "Resetting schedule progress");
   this->schedule.clear();
   this->schedule_name = "";
   this->current_step = 0;
@@ -206,10 +236,10 @@ std::string KilnApi::get_state() {
 void KilnApi::update() {
   if (this->pending_mode_change_) {
     if (this->pending_mode_countdown_ > 0) {
-      // wait for HTTP response to flush before triggering the mode change that disrupts TCP connections
       this->pending_mode_countdown_--;
       return;
     }
+    ESP_LOGI(TAG, "Applying pending mode change: mode=%d", (int)this->pending_mode_);
     this->pending_mode_change_ = false;
     this->set_kiln_mode(this->pending_mode_);
     return;
@@ -219,17 +249,28 @@ void KilnApi::update() {
   }
 
   // shutdown kiln when last step done
-  if(this->current_step >= this->schedule.size()) {
-    ESP_LOGI(TAG, "Shutdown kiln");
+  if(this->current_step >= (int)this->schedule.size()) {
+    ESP_LOGI(TAG, "Shutdown kiln: current_step=%d schedule_size=%d", this->current_step, (int)this->schedule.size());
     this->reset_progress();
     this->set_kiln_mode(climate::CLIMATE_MODE_OFF);
     return;
   }
 
   // enforce heat mode while schedule is running — re-applies if externally changed (e.g. HA state restore on reconnect)
+  // uses the pending mechanism to avoid triggering successive API disconnects on rapid re-application
   if (kiln_->mode != climate::CLIMATE_MODE_HEAT) {
-    ESP_LOGW(TAG, "Schedule active but climate not in heat mode (mode=%d), re-applying heat", (int)kiln_->mode);
-    this->set_kiln_mode(climate::CLIMATE_MODE_HEAT);
+    ESP_LOGW(TAG, "Schedule active but climate not in heat mode (mode=%d), re-applying heat via pending", (int)kiln_->mode);
+    if (!this->pending_mode_change_) {
+      this->pending_mode_ = climate::CLIMATE_MODE_HEAT;
+      this->pending_mode_countdown_ = 2;
+      this->pending_mode_change_ = true;
+    }
+    return;
+  }
+
+  // guard against externally corrupted target temperature that would propagate NaN/Inf into schedule logic
+  if (!std::isfinite(kiln_->target_temperature)) {
+    ESP_LOGW(TAG, "Invalid target temperature (NaN/Inf), skipping schedule update");
     return;
   }
 
@@ -248,7 +289,6 @@ void KilnApi::update() {
 
   // if target is lower then previous it is a cooling cycle, negate ramp_calculated
   if(current_step != 0 && target < this->schedule[current_step-1][1]) {
-    ESP_LOGD(TAG, "Cooling step, negating ramp");
     ramp_calculated = -ramp_calculated;
     heating_step = false;
   }
@@ -261,8 +301,6 @@ void KilnApi::update() {
   }
 
   // check if target from step reached
-  // TODO: check this with real temp or on PID state?
-  // id(kiln).action == climate::CLIMATE_ACTION_IDLE
   if (
     this->remaining_hold < 0
     && (
@@ -274,9 +312,10 @@ void KilnApi::update() {
       (!heating_step && kiln_->current_temperature <= target && target == new_target)
     )
   ) {
-    ESP_LOGI(TAG, "Target reached");
+    ESP_LOGI(TAG, "Target reached: step=%d current_temp=%.2f target=%d new_target=%.2f",
+             this->current_step, kiln_->current_temperature, target, new_target);
     if (hold > 0) {
-      // set seconds to hold
+      // set seconds to hold (hold is validated <= 43200 minutes, so hold * 60 <= 2592000, safe for int)
       this->remaining_hold = hold * 60;
       ESP_LOGI(TAG, "Hold started, duration: %ih %im %is", this->remaining_hold/3600, (this->remaining_hold % 3600) /60, this->remaining_hold % 60);
     } else {
@@ -288,7 +327,7 @@ void KilnApi::update() {
   }
   // prepare when hold is at last iteration, next iteration will use new schedule
   if (this->remaining_hold == 1) {
-    ESP_LOGI(TAG, "Hold done");
+    ESP_LOGI(TAG, "Hold done, moving to step %d", this->current_step + 1);
     // reset hold
     this->remaining_hold = -1;
     // move to next step
@@ -302,7 +341,7 @@ void KilnApi::update() {
   }
 
   if (new_target != kiln_->target_temperature) {
-    ESP_LOGD(TAG, "Set target to %.1f", new_target);
+    ESP_LOGI(TAG, "Ramping: set target_temperature=%.2f (was %.2f)", new_target, kiln_->target_temperature);
     kiln_->target_temperature = new_target;
   }
 }

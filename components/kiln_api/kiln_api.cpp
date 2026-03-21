@@ -268,18 +268,6 @@ void KilnApi::update() {
     return;
   }
 
-  // enforce heat mode while schedule is running — re-applies if externally changed (e.g. HA state restore on reconnect)
-  // uses the pending mechanism to avoid triggering successive API disconnects on rapid re-application
-  if (kiln_->mode != climate::CLIMATE_MODE_HEAT) {
-    ESP_LOGW(TAG, "Schedule active but climate not in heat mode (mode=%d), re-applying heat via pending", (int)kiln_->mode);
-    if (!this->pending_mode_change_) {
-      this->pending_mode_ = climate::CLIMATE_MODE_HEAT;
-      this->pending_mode_countdown_ = 2;
-      this->pending_mode_change_ = true;
-    }
-    return;
-  }
-
   // guard against externally corrupted target temperature that would propagate NaN/Inf into schedule logic
   if (!std::isfinite(kiln_->target_temperature)) {
     ESP_LOGW(TAG, "Invalid target temperature (NaN/Inf), skipping schedule update");

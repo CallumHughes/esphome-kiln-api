@@ -56,26 +56,34 @@ void KilnApi::handle_state_request(AsyncWebServerRequest *request) {
   request->send(response);
 }
 
-void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
+void KilnApi::handle_cancel_request(AsyncWebServerRequest *request) {
   if (request->method() == HTTP_OPTIONS) {
-    // basic CORS response
     AsyncWebServerResponse *response = request->beginResponse(204, "text/plain");
-    response->addHeader("Access-Control-Allow-Methods", "OPTIONS, DELETE, POST");
+    response->addHeader("Access-Control-Allow-Methods", "OPTIONS, POST");
     response->addHeader("Access-Control-Allow-Headers", "*");
     response->addHeader("Access-Control-Max-Age", "86400");
     request->send(response);
-
-  } else if (request->method() == HTTP_DELETE) {
-    // cancel current run and shutdown kiln
+  } else if (request->method() == HTTP_POST) {
     ESP_LOGI(TAG, "Cancelled schedule %s, shutdown kiln", this->schedule_name.c_str());
     this->reset_progress();
     this->pending_mode_ = climate::CLIMATE_MODE_OFF;
     this->pending_mode_change_ = true;
-    {
-      AsyncWebServerResponse *response = request->beginResponse(200, "application/json", "{\"status\": \"ok\"}");
-      response->addHeader("Access-Control-Allow-Origin", "*");
-      request->send(response);
-    }
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", "{\"status\": \"ok\"}");
+    response->addHeader("Access-Control-Allow-Origin", "*");
+    request->send(response);
+  } else {
+    request->send(405, "text/plain", "Method Not Allowed");
+  }
+}
+
+void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
+  if (request->method() == HTTP_OPTIONS) {
+    // basic CORS response
+    AsyncWebServerResponse *response = request->beginResponse(204, "text/plain");
+    response->addHeader("Access-Control-Allow-Methods", "OPTIONS, POST");
+    response->addHeader("Access-Control-Allow-Headers", "*");
+    response->addHeader("Access-Control-Max-Age", "86400");
+    request->send(response);
 
   } else if (request->method() == HTTP_POST) {
     // reset current progress
@@ -185,6 +193,10 @@ void KilnApi::handleRequest(AsyncWebServerRequest *request) {
   std::string_view path = url.substr(5);  // strip /kiln
   if (path == "/schedule") {
     this->handle_schedule_request(request);
+    return;
+  }
+  if (path == "/schedule/cancel") {
+    this->handle_cancel_request(request);
     return;
   }
   if (path == "/state") {

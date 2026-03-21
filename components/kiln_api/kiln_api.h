@@ -28,6 +28,9 @@ class KilnApi : public PollingComponent, public AsyncWebHandler {
   // handle /schedule request
   void handle_schedule_request(AsyncWebServerRequest *request);
 
+  // handle /schedule/cancel request
+  void handle_cancel_request(AsyncWebServerRequest *request);
+
   // handle /state request (replaces SSE - clients poll this)
   void handle_state_request(AsyncWebServerRequest *request);
 

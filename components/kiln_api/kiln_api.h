@@ -2,6 +2,7 @@
 
 #include "esphome/core/component.h"
 #include "esphome/core/automation.h"
+#include "esphome/core/preferences.h"
 #include "esphome/components/web_server_base/web_server_base.h"
 #include "esphome/components/pid/pid_climate.h"
 
@@ -27,6 +28,9 @@ class KilnApi : public PollingComponent, public AsyncWebHandler {
   // handle /schedule request
   void handle_schedule_request(AsyncWebServerRequest *request);
 
+  // handle /schedule/cancel request
+  void handle_cancel_request(AsyncWebServerRequest *request);
+
   // handle /state request (replaces SSE - clients poll this)
   void handle_state_request(AsyncWebServerRequest *request);
 
@@ -35,6 +39,9 @@ class KilnApi : public PollingComponent, public AsyncWebHandler {
 
   // reset kiln to ready state
   void reset_progress();
+
+  // set PID climate mode
+  void set_kiln_mode(climate::ClimateMode mode);
 
  protected:
   web_server_base::WebServerBase *base_;
@@ -55,6 +62,14 @@ class KilnApi : public PollingComponent, public AsyncWebHandler {
   int remaining_hold = -1;
   // monotonic counter incremented on every state change, used for ETag generation
   uint32_t state_etag_ = 0;
+  // NVS preference for detecting restart during active schedule
+  ESPPreferenceObject pref_;
+  bool schedule_interrupted_ = false;
+  // pending mode change to be applied on the main loop task
+  bool pending_mode_change_ = false;
+  climate::ClimateMode pending_mode_ = climate::CLIMATE_MODE_OFF;
+  // countdown in update() cycles before applying pending mode change — gives HTTP response time to flush
+  int pending_mode_countdown_ = 0;
 };
 
 class RequestHandler : public Trigger<AsyncWebServerRequest &, AsyncResponseStream &> {

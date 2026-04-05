@@ -233,6 +233,7 @@ void KilnApi::reset_progress() {
   this->schedule_interrupted_ = false;
   this->pending_mode_change_ = false;
   this->pending_mode_countdown_ = 0;
+  this->kiln_->target_temperature = 0;
   bool inactive = false;
   pref_.save(&inactive);
   this->state_etag_++;
@@ -245,6 +246,7 @@ std::string KilnApi::get_state() {
     root["started_at"] = this->started_at_;
     root["start_temperature"] = this->schedule_start_temperature;
     root["temperature"] = this->kiln_->current_temperature;
+    root["target_temperature"] = this->kiln_->target_temperature;
     root["schedule"]["name"] = this->schedule_name;
     root["schedule"]["steps"] = this->schedule;
     root["interrupted"] = this->schedule_interrupted_;

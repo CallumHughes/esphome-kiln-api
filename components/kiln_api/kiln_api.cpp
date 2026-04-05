@@ -8,16 +8,19 @@ namespace kiln_api {
 
 static const char *TAG = "kiln_api_0.2.1";
 
+
 void KilnApi::setup() {
   pref_ = global_preferences->make_preference<bool>(fnv1_hash("kiln_api_active"));
   bool was_active = false;
   pref_.load(&was_active);
   if (was_active) {
-    ESP_LOGW(TAG, "Schedule was interrupted by an unexpected restart");
     this->schedule_interrupted_ = true;
     bool cleared = false;
     pref_.save(&cleared);
   }
+
+  this->reset_reason_ = esp_reset_reason();
+
   base_->add_handler(this);
 }
 
@@ -141,9 +144,6 @@ void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
               }
               steps.push_back({ramp_val, target_val, hold_val});
             }
-            if (!parse_error.empty()) {
-              return true;
-            }
             this->schedule_name.assign(x["name"].as<std::string>());
             this->schedule = std::move(steps);
             parse_ok = true;
@@ -246,6 +246,15 @@ std::string KilnApi::get_state() {
 
 // controlloop, called every second
 void KilnApi::update() {
+  // log boot diagnostics (~30s after boot, network logger is ready)
+  if (!this->boot_logged_ && ++this->boot_log_counter_ >= 30) {
+    this->boot_logged_ = true;
+    ESP_LOGI(TAG, "Reset reason: %d", this->reset_reason_);
+    if (this->schedule_interrupted_) {
+      ESP_LOGW(TAG, "Schedule interrupted by reset reason: %d", this->reset_reason_);
+    }
+  }
+
   if (this->pending_mode_change_) {
     if (this->pending_mode_countdown_ > 0) {
       this->pending_mode_countdown_--;
@@ -265,12 +274,6 @@ void KilnApi::update() {
     ESP_LOGI(TAG, "Shutdown kiln: current_step=%d schedule_size=%d", this->current_step, (int)this->schedule.size());
     this->reset_progress();
     this->set_kiln_mode(climate::CLIMATE_MODE_OFF);
-    return;
-  }
-
-  // guard against externally corrupted target temperature that would propagate NaN/Inf into schedule logic
-  if (!std::isfinite(kiln_->target_temperature)) {
-    ESP_LOGW(TAG, "Invalid target temperature (NaN/Inf), skipping schedule update");
     return;
   }
 
@@ -327,11 +330,15 @@ void KilnApi::update() {
   }
   // prepare when hold is at last iteration, next iteration will use new schedule
   if (this->remaining_hold == 1) {
-    ESP_LOGI(TAG, "Hold done, moving to step %d", this->current_step + 1);
     // reset hold
     this->remaining_hold = -1;
     // move to next step
     this->current_step++;
+    if (this->current_step >= (int)this->schedule.size()) {
+      ESP_LOGI(TAG, "Hold done, schedule complete");
+    } else {
+      ESP_LOGI(TAG, "Hold done, moving to step %d", this->current_step);
+    }
     return;
   // just keep the hold going
   } else if (this->remaining_hold > 1) {
@@ -341,7 +348,7 @@ void KilnApi::update() {
   }
 
   if (new_target != kiln_->target_temperature) {
-    ESP_LOGI(TAG, "Ramping: set target_temperature=%.2f (was %.2f)", new_target, kiln_->target_temperature);
+    ESP_LOGD(TAG, "Ramping: set target_temperature=%.2f (was %.2f)", new_target, kiln_->target_temperature);
     kiln_->target_temperature = new_target;
   }
 }

@@ -5,6 +5,7 @@
 #include "esphome/core/preferences.h"
 #include "esphome/components/web_server_base/web_server_base.h"
 #include "esphome/components/pid/pid_climate.h"
+#include <esp_system.h>
 
 namespace esphome {
 namespace kiln_api {
@@ -65,6 +66,11 @@ class KilnApi : public PollingComponent, public AsyncWebHandler {
   // NVS preference for detecting restart during active schedule
   ESPPreferenceObject pref_;
   bool schedule_interrupted_ = false;
+  // reset reason captured in setup(), logged on first update() when network logger is ready
+  esp_reset_reason_t reset_reason_ = ESP_RST_UNKNOWN;
+  bool boot_logged_ = false;
+  // boot diagnostics counter (logs after 30 update cycles)
+  uint8_t boot_log_counter_ = 0;
   // pending mode change to be applied on the main loop task
   bool pending_mode_change_ = false;
   climate::ClimateMode pending_mode_ = climate::CLIMATE_MODE_OFF;

@@ -5,8 +5,11 @@ from esphome.components.web_server_base import CONF_WEB_SERVER_BASE_ID
 from esphome.components import web_server
 from esphome.components import web_server_base
 from esphome.components.pid import climate
+from esphome.components import time as time_
 
 AUTO_LOAD = ["web_server_base", "pid"]
+
+CONF_TIME_ID = "time_id"
 
 kiln_api_ns = cg.esphome_ns.namespace("kiln_api")
 KilnApiHandler = kiln_api_ns.class_("KilnApi", cg.Component)
@@ -20,6 +23,9 @@ CONFIG_SCHEMA = cv.Schema(
         cv.GenerateID("kiln"): cv.use_id(
             climate.PIDClimate
         ),
+        cv.Required(CONF_TIME_ID): cv.use_id(
+            time_.RealTimeClock
+        ),
     },
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -27,6 +33,7 @@ CONFIG_SCHEMA = cv.Schema(
 async def to_code(config):
     web_base = await cg.get_variable(config[CONF_WEB_SERVER_BASE_ID])
     climate = await cg.get_variable(config["kiln"])
+    time = await cg.get_variable(config[CONF_TIME_ID])
 
-    var = cg.new_Pvariable(config[CONF_ID], web_base, climate)
+    var = cg.new_Pvariable(config[CONF_ID], web_base, climate, time)
     await cg.register_component(var, config)

@@ -5,6 +5,7 @@
 #include "esphome/core/preferences.h"
 #include "esphome/components/web_server_base/web_server_base.h"
 #include "esphome/components/pid/pid_climate.h"
+#include "esphome/components/time/real_time_clock.h"
 #include <esp_system.h>
 
 namespace esphome {
@@ -15,7 +16,7 @@ class RequestHandler;
 // https://github.com/esphome/esphome/blob/release/esphome/components/web_server_base/web_server_base.h
 class KilnApi : public PollingComponent, public AsyncWebHandler {
  public:
-  KilnApi(web_server_base::WebServerBase *base, pid::PIDClimate *kiln) : PollingComponent(1000), base_(base), kiln_(kiln) {}
+  KilnApi(web_server_base::WebServerBase *base, pid::PIDClimate *kiln, time::RealTimeClock *time) : PollingComponent(1000), base_(base), kiln_(kiln), time_(time) {}
 
   void setup() override;
   void update() override;
@@ -47,10 +48,11 @@ class KilnApi : public PollingComponent, public AsyncWebHandler {
  protected:
   web_server_base::WebServerBase *base_;
   pid::PIDClimate *kiln_;
+  time::RealTimeClock *time_;
   RequestHandler *handler_;
 
-  // runtime in seconds
-  unsigned int runtime = 0;
+  // unix epoch timestamp of schedule start (0 = not running or NTP not synced)
+  time_t started_at_ = 0;
   // starting temperature
   int schedule_start_temperature = 0;
   // schedule name

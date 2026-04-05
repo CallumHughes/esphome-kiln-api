@@ -21,6 +21,10 @@ void KilnApi::setup() {
 
   this->reset_reason_ = esp_reset_reason();
 
+  this->time_->add_on_time_sync_callback([this]() {
+    ESP_LOGI(TAG, "Clock synchronized via NTP");
+  });
+
   base_->add_handler(this);
 }
 
@@ -159,6 +163,8 @@ void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
           return;
         }
         ESP_LOGI(TAG, "Starting schedule %s, heating kiln", this->schedule_name.c_str());
+        auto now = this->time_->now();
+        this->started_at_ = now.is_valid() ? now.timestamp : 0;
         bool active = true;
         pref_.save(&active);
         this->schedule_interrupted_ = false;
@@ -223,10 +229,11 @@ void KilnApi::reset_progress() {
   this->schedule_name = "";
   this->current_step = 0;
   this->remaining_hold = -1;
-  this->runtime = 0;
+  this->started_at_ = 0;
   this->schedule_interrupted_ = false;
   this->pending_mode_change_ = false;
   this->pending_mode_countdown_ = 0;
+  this->kiln_->target_temperature = 0;
   bool inactive = false;
   pref_.save(&inactive);
   this->state_etag_++;
@@ -235,9 +242,11 @@ void KilnApi::reset_progress() {
 std::string KilnApi::get_state() {
   return json::build_json([this](JsonObject root) {
     root["step"] = this->current_step;
-    root["runtime"] = this->runtime;
+    root["running"] = !this->schedule.empty();
+    root["started_at"] = this->started_at_;
     root["start_temperature"] = this->schedule_start_temperature;
     root["temperature"] = this->kiln_->current_temperature;
+    root["target_temperature"] = this->kiln_->target_temperature;
     root["schedule"]["name"] = this->schedule_name;
     root["schedule"]["steps"] = this->schedule;
     root["interrupted"] = this->schedule_interrupted_;
@@ -277,8 +286,7 @@ void KilnApi::update() {
     return;
   }
 
-  // update runtime seconds and invalidate ETag
-  this->runtime++;
+  // invalidate ETag (temperature changes each second)
   this->state_etag_++;
 
   // extract data

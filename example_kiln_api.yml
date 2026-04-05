@@ -40,8 +40,13 @@ spi:
   miso_pin: D3
   clk_pin: D4
 
+time:
+  - platform: sntp
+    id: sntp_time
+
 # Setup API
 kiln_api:
+  time_id: sntp_time
 external_components:
   - source: github://kiln-controller/esphome-kiln-api@main
 

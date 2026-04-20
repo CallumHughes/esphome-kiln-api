@@ -10,17 +10,6 @@ static const char *TAG = "kiln_api_0.2.1";
 
 
 void KilnApi::setup() {
-  pref_ = global_preferences->make_preference<bool>(fnv1_hash("kiln_api_active"));
-  bool was_active = false;
-  pref_.load(&was_active);
-  if (was_active) {
-    this->schedule_interrupted_ = true;
-    bool cleared = false;
-    pref_.save(&cleared);
-  }
-
-  this->reset_reason_ = esp_reset_reason();
-
   this->time_->add_on_time_sync_callback([this]() {
     ESP_LOGI(TAG, "Clock synchronized via NTP");
   });
@@ -93,13 +82,22 @@ void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
     request->send(response);
 
   } else if (request->method() == HTTP_POST) {
+    // reject if temperature sensor is not reporting valid data
+    if (std::isnan(kiln_->current_temperature)) {
+      AsyncWebServerResponse *err = request->beginResponse(500, "application/json",
+        "{\"status\": \"error\", \"reason\": \"temperature sensor not ready\"}");
+      err->addHeader("Access-Control-Allow-Origin", "*");
+      request->send(err);
+      return;
+    }
+
     // reset current progress
     this->reset_progress();
 
     // set the target temperature to the current temperature for the update loop to start at the right temp
     kiln_->target_temperature = kiln_->current_temperature;
-    // set the schedule start temperature to the current
-    this->schedule_start_temperature = kiln_->target_temperature;
+    // set the schedule start temperature to the current (rounded to nearest degree)
+    this->schedule_start_temperature = static_cast<int>(lroundf(kiln_->target_temperature));
 
     // Read body directly from the ESP-IDF httpd request
     // The IDF web server doesn't call handleBody for application/json content types
@@ -165,9 +163,6 @@ void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
         ESP_LOGI(TAG, "Starting schedule %s, heating kiln", this->schedule_name.c_str());
         auto now = this->time_->now();
         this->started_at_ = now.is_valid() ? now.timestamp : 0;
-        bool active = true;
-        pref_.save(&active);
-        this->schedule_interrupted_ = false;
         this->pending_mode_ = climate::CLIMATE_MODE_HEAT;
         this->pending_mode_countdown_ = 2;
         this->pending_mode_change_ = true;
@@ -230,12 +225,9 @@ void KilnApi::reset_progress() {
   this->current_step = 0;
   this->remaining_hold = -1;
   this->started_at_ = 0;
-  this->schedule_interrupted_ = false;
   this->pending_mode_change_ = false;
   this->pending_mode_countdown_ = 0;
   this->kiln_->target_temperature = 0;
-  bool inactive = false;
-  pref_.save(&inactive);
   this->state_etag_++;
 }
 
@@ -249,21 +241,11 @@ std::string KilnApi::get_state() {
     root["target_temperature"] = this->kiln_->target_temperature;
     root["schedule"]["name"] = this->schedule_name;
     root["schedule"]["steps"] = this->schedule;
-    root["interrupted"] = this->schedule_interrupted_;
   });
 }
 
 // controlloop, called every second
 void KilnApi::update() {
-  // log boot diagnostics (~30s after boot, network logger is ready)
-  if (!this->boot_logged_ && ++this->boot_log_counter_ >= 30) {
-    this->boot_logged_ = true;
-    ESP_LOGI(TAG, "Reset reason: %d", this->reset_reason_);
-    if (this->schedule_interrupted_) {
-      ESP_LOGW(TAG, "Schedule interrupted by reset reason: %d", this->reset_reason_);
-    }
-  }
-
   if (this->pending_mode_change_) {
     if (this->pending_mode_countdown_ > 0) {
       this->pending_mode_countdown_--;
@@ -295,13 +277,15 @@ void KilnApi::update() {
   int hold = this->schedule[current_step][2];
   // divide 3600 to make ramp per second 1s
   float ramp_calculated = (float)ramp / (float)3600;
-  // assume the first step is always heating since it is an kiln after all
-  bool heating_step = true;
+  // derive ramp start from schedule data (step 0 uses start temp, others use previous step target)
+  float ramp_start = (current_step == 0)
+      ? (float)this->schedule_start_temperature
+      : (float)this->schedule[current_step - 1][1];
+  bool heating_step = target >= ramp_start;
 
-  // if target is lower then previous it is a cooling cycle, negate ramp_calculated
-  if(current_step != 0 && target < this->schedule[current_step-1][1]) {
+  // if cooling cycle, negate ramp_calculated
+  if(!heating_step) {
     ramp_calculated = -ramp_calculated;
-    heating_step = false;
   }
 
   // calculate new target temperature
@@ -336,6 +320,14 @@ void KilnApi::update() {
       return;
     }
   }
+  // debug: log while final step's ramp is done but waiting for actual temp to reach target
+  if (this->current_step == (int)this->schedule.size() - 1
+      && this->remaining_hold < 0
+      && new_target == (float)target) {
+    ESP_LOGD(TAG, "Final step ramp done, waiting for temp: current=%.2f target=%d",
+             kiln_->current_temperature, target);
+  }
+
   // prepare when hold is at last iteration, next iteration will use new schedule
   if (this->remaining_hold == 1) {
     // reset hold
@@ -356,7 +348,9 @@ void KilnApi::update() {
   }
 
   if (new_target != kiln_->target_temperature) {
-    ESP_LOGD(TAG, "Ramping: set target_temperature=%.2f (was %.2f)", new_target, kiln_->target_temperature);
+    ESP_LOGD(TAG, "Ramp: step=%d %s start=%.2f target=%d new_target=%.2f current=%.2f",
+             this->current_step, heating_step ? "heating" : "cooling",
+             ramp_start, target, new_target, kiln_->current_temperature);
     kiln_->target_temperature = new_target;
   }
 }

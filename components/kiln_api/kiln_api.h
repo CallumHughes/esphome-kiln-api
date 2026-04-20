@@ -2,11 +2,9 @@
 
 #include "esphome/core/component.h"
 #include "esphome/core/automation.h"
-#include "esphome/core/preferences.h"
 #include "esphome/components/web_server_base/web_server_base.h"
 #include "esphome/components/pid/pid_climate.h"
 #include "esphome/components/time/real_time_clock.h"
-#include <esp_system.h>
 
 namespace esphome {
 namespace kiln_api {
@@ -65,14 +63,6 @@ class KilnApi : public PollingComponent, public AsyncWebHandler {
   int remaining_hold = -1;
   // monotonic counter incremented on every state change, used for ETag generation
   uint32_t state_etag_ = 0;
-  // NVS preference for detecting restart during active schedule
-  ESPPreferenceObject pref_;
-  bool schedule_interrupted_ = false;
-  // reset reason captured in setup(), logged on first update() when network logger is ready
-  esp_reset_reason_t reset_reason_ = ESP_RST_UNKNOWN;
-  bool boot_logged_ = false;
-  // boot diagnostics counter (logs after 30 update cycles)
-  uint8_t boot_log_counter_ = 0;
   // pending mode change to be applied on the main loop task
   bool pending_mode_change_ = false;
   climate::ClimateMode pending_mode_ = climate::CLIMATE_MODE_OFF;

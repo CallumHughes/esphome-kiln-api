@@ -6,7 +6,7 @@
 namespace esphome {
 namespace kiln_api {
 
-static const char *TAG = "kiln_api_0.2.1";
+static const char *TAG = "kiln_api_0.2.2";
 
 
 void KilnApi::setup() {
@@ -36,14 +36,12 @@ void KilnApi::handle_state_request(AsyncWebServerRequest *request) {
     request->send(405, "text/plain", "Method Not Allowed");
     return;
   }
+  // No 304 short-circuit, even when If-None-Match matches. web_server_idf only
+  // maps 200/404/409 to a valid status string; every other code is passed as a
+  // pointer into a destroyed temporary, and the device answers 500 instead. The
+  // ETag is still sent so conditional GETs can be restored if that is fixed.
   char etag[16];
   snprintf(etag, sizeof(etag), "\"%u\"", this->state_etag_);
-  if (request->hasHeader("If-None-Match") && request->get_header("If-None-Match") == etag) {
-    AsyncWebServerResponse *not_modified = request->beginResponse(304, "text/plain");
-    not_modified->addHeader("ETag", etag);
-    request->send(not_modified);
-    return;
-  }
   std::string state_json = this->get_state();
   AsyncWebServerResponse *response = request->beginResponse(200, "application/json", state_json);
   response->addHeader("ETag", etag);
@@ -52,7 +50,7 @@ void KilnApi::handle_state_request(AsyncWebServerRequest *request) {
 
 void KilnApi::handle_cancel_request(AsyncWebServerRequest *request) {
   if (request->method() == HTTP_OPTIONS) {
-    AsyncWebServerResponse *response = request->beginResponse(204, "text/plain");
+    AsyncWebServerResponse *response = request->beginResponse(200, "text/plain");
     response->addHeader("Access-Control-Allow-Methods", "OPTIONS, POST");
     response->addHeader("Access-Control-Allow-Headers", "*");
     response->addHeader("Access-Control-Max-Age", "86400");
@@ -72,7 +70,7 @@ void KilnApi::handle_cancel_request(AsyncWebServerRequest *request) {
 void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
   if (request->method() == HTTP_OPTIONS) {
     // basic CORS response
-    AsyncWebServerResponse *response = request->beginResponse(204, "text/plain");
+    AsyncWebServerResponse *response = request->beginResponse(200, "text/plain");
     response->addHeader("Access-Control-Allow-Methods", "OPTIONS, POST");
     response->addHeader("Access-Control-Allow-Headers", "*");
     response->addHeader("Access-Control-Max-Age", "86400");

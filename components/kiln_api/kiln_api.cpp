@@ -40,14 +40,12 @@ void KilnApi::handle_state_request(AsyncWebServerRequest *request) {
   snprintf(etag, sizeof(etag), "\"%u\"", this->state_etag_);
   if (request->hasHeader("If-None-Match") && request->get_header("If-None-Match") == etag) {
     AsyncWebServerResponse *not_modified = request->beginResponse(304, "text/plain");
-    not_modified->addHeader("Access-Control-Allow-Origin", "*");
     not_modified->addHeader("ETag", etag);
     request->send(not_modified);
     return;
   }
   std::string state_json = this->get_state();
   AsyncWebServerResponse *response = request->beginResponse(200, "application/json", state_json);
-  response->addHeader("Access-Control-Allow-Origin", "*");
   response->addHeader("ETag", etag);
   request->send(response);
 }
@@ -65,7 +63,6 @@ void KilnApi::handle_cancel_request(AsyncWebServerRequest *request) {
     this->pending_mode_ = climate::CLIMATE_MODE_OFF;
     this->pending_mode_change_ = true;
     AsyncWebServerResponse *response = request->beginResponse(200, "application/json", "{\"status\": \"ok\"}");
-    response->addHeader("Access-Control-Allow-Origin", "*");
     request->send(response);
   } else {
     request->send(405, "text/plain", "Method Not Allowed");
@@ -86,7 +83,6 @@ void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
     if (std::isnan(kiln_->current_temperature)) {
       AsyncWebServerResponse *err = request->beginResponse(500, "application/json",
         "{\"status\": \"error\", \"reason\": \"temperature sensor not ready\"}");
-      err->addHeader("Access-Control-Allow-Origin", "*");
       request->send(err);
       return;
     }
@@ -156,7 +152,6 @@ void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
           std::string reason = parse_error.empty() ? "missing name or schedule key in JSON" : parse_error;
           std::string body = "{\"status\": \"error\", \"reason\": \"" + reason + "\"}";
           AsyncWebServerResponse *err = request->beginResponse(500, "application/json", body);
-          err->addHeader("Access-Control-Allow-Origin", "*");
           request->send(err);
           return;
         }
@@ -168,18 +163,15 @@ void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
         this->pending_mode_change_ = true;
         {
           AsyncWebServerResponse *response = request->beginResponse(200, "application/json", "{\"status\": \"ok\"}");
-          response->addHeader("Access-Control-Allow-Origin", "*");
           request->send(response);
         }
       } else {
         ESP_LOGW(TAG, "Failed to read request body, ret=%d", ret);
         AsyncWebServerResponse *err = request->beginResponse(500, "application/json", "{\"status\": \"error\", \"reason\": \"failed to read body\"}");
-        err->addHeader("Access-Control-Allow-Origin", "*");
         request->send(err);
       }
     } else {
       AsyncWebServerResponse *err = request->beginResponse(500, "application/json", "{\"status\": \"error\", \"reason\": \"invalid or missing JSON body\"}");
-      err->addHeader("Access-Control-Allow-Origin", "*");
       request->send(err);
     }
   } else {  // unsupported method

@@ -6,7 +6,7 @@
 namespace esphome {
 namespace kiln_api {
 
-static const char *TAG = "kiln_api_0.2.1";
+static const char *TAG = "kiln_api_0.2.2";
 
 
 void KilnApi::setup() {
@@ -36,14 +36,14 @@ void KilnApi::handle_state_request(AsyncWebServerRequest *request) {
     request->send(405, "text/plain", "Method Not Allowed");
     return;
   }
+  // No 304 short-circuit, even when If-None-Match matches. web_server_idf maps
+  // only a fixed set of status codes and sends 500 for anything else: 200/404/409
+  // on 2026.5, plus 204/400/401/422 from 2026.7. 304 is unmapped in every release
+  // to date, including dev, so a conditional GET would answer 500 and the client
+  // would read it as a dead API. The ETag header stays so the short-circuit can
+  // be restored if 304 is ever mapped.
   char etag[16];
   snprintf(etag, sizeof(etag), "\"%u\"", this->state_etag_);
-  if (request->hasHeader("If-None-Match") && request->get_header("If-None-Match") == etag) {
-    AsyncWebServerResponse *not_modified = request->beginResponse(304, "text/plain");
-    not_modified->addHeader("ETag", etag);
-    request->send(not_modified);
-    return;
-  }
   std::string state_json = this->get_state();
   AsyncWebServerResponse *response = request->beginResponse(200, "application/json", state_json);
   response->addHeader("ETag", etag);
@@ -52,7 +52,7 @@ void KilnApi::handle_state_request(AsyncWebServerRequest *request) {
 
 void KilnApi::handle_cancel_request(AsyncWebServerRequest *request) {
   if (request->method() == HTTP_OPTIONS) {
-    AsyncWebServerResponse *response = request->beginResponse(204, "text/plain");
+    AsyncWebServerResponse *response = request->beginResponse(200, "text/plain");
     response->addHeader("Access-Control-Allow-Methods", "OPTIONS, POST");
     response->addHeader("Access-Control-Allow-Headers", "*");
     response->addHeader("Access-Control-Max-Age", "86400");
@@ -71,8 +71,9 @@ void KilnApi::handle_cancel_request(AsyncWebServerRequest *request) {
 
 void KilnApi::handle_schedule_request(AsyncWebServerRequest *request) {
   if (request->method() == HTTP_OPTIONS) {
-    // basic CORS response
-    AsyncWebServerResponse *response = request->beginResponse(204, "text/plain");
+    // basic CORS response. 200 rather than 204 for back-compat: 204 is only
+    // representable from ESPHome 2026.7 onwards (see handle_state_request).
+    AsyncWebServerResponse *response = request->beginResponse(200, "text/plain");
     response->addHeader("Access-Control-Allow-Methods", "OPTIONS, POST");
     response->addHeader("Access-Control-Allow-Headers", "*");
     response->addHeader("Access-Control-Max-Age", "86400");
